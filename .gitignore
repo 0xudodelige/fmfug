@@ -9,6 +9,10 @@ venv/
 env/
 .env
 
+# Build
+build/
+dist/
+
 # Input/Output files (to avoid uploading your test data)
 *.txt
 *.csv
