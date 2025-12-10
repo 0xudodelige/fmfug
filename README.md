@@ -118,6 +118,8 @@ last12   → appends 0..12
 
 ## 📘 Examples
 
+![FMFUG Example GIF](https://github.com/0xudodelige/fmfug/blob/main/fmfug.gif?raw=true)
+
 ### 1. Basic usage
 ```bash
 fmfug
