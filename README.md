@@ -27,19 +27,22 @@ $$ |      $$ | \_/ $$ |$$ |      \$$$$$$  |\$$$$$$  |
 
 ## 📦 Installation
 
+### 1. Install from pypi
+
+**Using pipx**
+```bash
+pipx install fmfug
+```
+
+### 2. Install from source
 1. Clone the repository:
     ```bash
-    git clone [https://github.com/0xudodelige/fmfug.git](https://github.com/0xudodelige/fmfug.git)
+    git clone https://github.com/0xudodelige/fmfug.git
     cd fmfug
     ```
 2. Install:
-
-    **Using pip**
-    ```bash
-    pip install .
-    ```    
     **Using pipx**
-    ```
+    ```bash
     pipx install .
     ```
     *(Note: The script works without tqdm, but installing it provides a progress bar).*
