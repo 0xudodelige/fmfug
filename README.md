@@ -1,3 +1,4 @@
+```powershell
 $$$$$$$$\ $$\      $$\ $$$$$$$$\ $$\   $$\  $$$$$$\  
 $$  _____|$$$\    $$$ |$$  _____|$$ |  $$ |$$  __$$\ 
 $$ |      $$$$\  $$$$ |$$ |      $$ |  $$ |$$ /  \__|
@@ -6,7 +7,7 @@ $$  __|   $$ \$$$  $$ |$$  __|   $$ |  $$ |$$ |\_$$ |
 $$ |      $$ |\$  /$$ |$$ |      $$ |  $$ |$$ |  $$ |
 $$ |      $$ | \_/ $$ |$$ |      \$$$$$$  |\$$$$$$  |
 \__|      \__|     \__|\__|       \______/  \______/ 
-
+```
 
 # 🦂 FMFUG — Fast Memory Friendly Username Generator
 
@@ -32,29 +33,29 @@ $$ |      $$ | \_/ $$ |$$ |      \$$$$$$  |\$$$$$$  |
     cd fmfug
     ```
 2. Install:
+
     **Using pip**
     ```bash
     pip install .
-    ```
-    *(Note: The script works without tqdm, but installing it provides a progress bar).*
-    
+    ```    
     **Using pipx**
     ```
     pipx install .
     ```
+    *(Note: The script works without tqdm, but installing it provides a progress bar).*
 
 ---
 
 ## 🧑💻 Usage
 
-```
-usage: fmfug [-h] [-i INPUT] [-o OUTPUT] [-f FORMAT_LIST]
-                [--formats FORMATS] [-t THREADS] [--no-parallel]
-                [--case-sensitive] [-q] [--list-formats]
-                [--first-names FIRST_NAMES] [--last-names LAST_NAMES]
-
-Generate username variations (streaming + multithreading)
-```
+    ```
+    usage: fmfug [-h] [-i INPUT] [-o OUTPUT] [-f FORMAT_LIST]
+                    [--formats FORMATS] [-t THREADS] [--no-parallel]
+                    [--case-sensitive] [-q] [--list-formats]
+                    [--first-names FIRST_NAMES] [--last-names LAST_NAMES]
+    
+    Generate username variations (streaming + multithreading)
+    ```
 
 ---
 
@@ -63,14 +64,14 @@ Generate username variations (streaming + multithreading)
 | Option | Description |
 |-------|-------------|
 | `-i`, `--input INPUT` | Input file with full names (default: users.txt) |
-| `--first-names FIRST_NAMES` | File containing first names (one per line) |
-| `--last-names LAST_NAMES` | File containing last names (one per line) |
+| `-fn`, `--first-names FIRST_NAMES` | File containing first names (one per line) |
+| `-ln`, `--last-names LAST_NAMES` | File containing last names (one per line) |
 | `-o`, `--output OUTPUT` | Output file (default: stdout) |
 | `-f`, `--format FORMAT_LIST` | Add custom format pattern (repeatable) |
 | `--formats FORMATS` | File containing format patterns |
 | `-t`, `--threads THREADS` | Number of threads (default: 4) |
 | `--case-sensitive` | Preserve original case |
-| `-q`, `--quiet` | Quiet mode |
+| `-q`, `--quiet` | Quiet mode (for redirection or pipe) |
 | `--list-formats` | Show default format patterns |
 | `-h`, `--help` | Show help message |
 
@@ -119,37 +120,37 @@ last12   → appends 0..12
 
 ### 1. Basic usage
 ```bash
-fmfug.py
+fmfug
 ```
 
 ### 2. Output to file
 ```bash
-fmfug.py -o usernames.txt
+fmfug -o usernames.txt
 ```
 
 ### 3. Use 8 threads
 ```bash
-fmfug.py -t 8
+fmfug -t 8
 ```
 
 ### 4. Inline custom formats
 ```bash
-fmfug.py -f "first.last" -f "f.last" -o out.txt
+fmfug -f "first.last" -f "f.last" -o out.txt
 ```
 
 ### 5. Load custom formats from file
 ```bash
-fmfug.py --formats patterns.txt
+fmfug --formats patterns.txt
 ```
 
 ### 6. Case-sensitive output
 ```bash
-fmfug.py --case-sensitive
+fmfug --case-sensitive
 ```
 
 ### 7. First/Last name combination mode
 ```bash
-fmfug.py --first-names fn.txt --last-names ln.txt
+fmfug --first-names fn.txt --last-names ln.txt
 ```
 
 ---
