@@ -249,6 +249,7 @@ def main():
     parser.add_argument('-t', '--threads', type=int, default=4, help='Number of threads')
     parser.add_argument('-fn', '--first-names', type=Path, help='First names file')
     parser.add_argument('-ln', '--last-names', type=Path, help='Last names file')
+    parser.add_argument('-q', '--quiet', action='store_true', help='Quiet mode (for redirection or pipe)')
     parser.add_argument('-cs', '--case-sensitive', action='store_true', help='Preserve case')
     parser.add_argument('-lf', '--list-formats', action='store_true', help='Show default formats')
 
@@ -259,7 +260,7 @@ def main():
         return 0
 
     def log(msg):
-        if args.output or sys.stderr.isatty():
+        if not args.quiet and (args.output or sys.stderr.isatty()):
             sys.stderr.write(msg + "\n")
     ascii_logo = f"""
 $$$$$$$$\\ $$\\      $$\\ $$$$$$$$\\ $$\\   $$\\  $$$$$$\\  
