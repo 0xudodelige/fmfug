@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Fast Memory Friendly Username Generator v1.0
+Fast Memory Friendly Username Generator
 - Streaming input (Low RAM)
 - Threaded Generation
 - Buffered Output (Fast Disk I/O)
 - Progress Bar
 """
 
-version = "1.0"
+version = "1.1"
 
 import argparse
 import sys
@@ -152,7 +152,7 @@ def run_processing(generator: UsernameGenerator,
                   output_file: Optional[TextIO], 
                   workers: int = 4):
     """
-    Gestionnaire principal : Parallélisme + Buffer + Backpressure
+    Main handler : Parallelism + Buffer + Backpressure
     """
     
     # Configuration
@@ -162,7 +162,6 @@ def run_processing(generator: UsernameGenerator,
     output_buffer = []
     total_generated = 0
     
-    # Wrapper pour gérer les tuples (fn, ln) ou str (name)
     def prepare_args(item):
         if isinstance(item, tuple):
             return (None, item[0], item[1]) # (None, fn, ln)
@@ -222,6 +221,8 @@ def run_processing(generator: UsernameGenerator,
     return total_generated
 
 def load_names(filepath: Path) -> List[str]:
+    if filepath.as_posix() == "-":
+        return [line.strip() for line in sys.stdin if line.strip()]
     if not filepath.exists():
         raise FileNotFoundError(f"{filepath} not found.")
     with filepath.open('r', encoding='utf-8') as f:
@@ -241,7 +242,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    parser.add_argument('-i', '--input', type=Path, default=Path('users.txt'), help='Input file with names')
+    parser.add_argument('-i', '--input', type=Path, default=Path('users.txt'), help='Input file with names (use - for stdin)')
     parser.add_argument('-o', '--output', type=Path, help='Output file (Default: stdout)')
     parser.add_argument('-f', '--format', action='append', dest='format_list', help='Add format pattern')
     parser.add_argument('--formats', type=Path, help='File with format patterns')
