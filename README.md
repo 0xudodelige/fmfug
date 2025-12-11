@@ -25,6 +25,12 @@ $$ |      $$ | \_/ $$ |$$ |      \$$$$$$  |\$$$$$$  |
 
 ---
 
+## ❓ Why ❓
+
+- **username-anarchy** made my pc burn down to ashes
+
+---
+
 ## 📦 Installation
 
 ### 1. Install from pypi
