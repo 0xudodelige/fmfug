@@ -12,6 +12,7 @@ env/
 # Build
 build/
 dist/
+*.sh
 
 # Input/Output files (to avoid uploading your test data)
 *.txt
