@@ -20,7 +20,7 @@ $$ |      $$ | \_/ $$ |$$ |      \$$$$$$  |\$$$$$$  |
 - **Memory Friendly**: Uses lazy evaluation and streaming. Can process millions of names with minimal RAM usage.
 - **Fast I/O**: Implements output buffering to minimize disk write operations.
 - **Multithreaded**: processes names in parallel for maximum speed.
-- **Customizable**: Supports custom format patterns (e.g., `first.last`, `f-last`, `first[3]last`).
+- **Customizable**: Supports custom format patterns (e.g., `first.last`, `first[1]last`).
 - **Combinatorial Mode**: Can generate combinations from separate first and last name files (Cartesian product) without loading everything into memory.
 
 ---
@@ -146,7 +146,7 @@ fmfug -t 8
 
 ### 4. Inline custom formats
 ```bash
-fmfug -f "first.last" -f "f.last" -o out.txt
+fmfug -f "first.last" -f "first[1].last" -o out.txt
 ```
 
 ### 5. Load custom formats from file
