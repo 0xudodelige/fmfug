@@ -52,62 +52,63 @@ class CompiledFormat:
         self.max_num = max_num       # The max number for iterator
         self.original_fmt = original_fmt
 
-def compile_format(format_str: str) -> CompiledFormat:
-    """
-    Parses a format string ONCE into a list of optimized instructions.
-    Replaces runtime Regex with static list iteration.
-    """
-    
-    # 1. Detect Numeric Suffix (e.g., "first.last5")
-    # Logic: Ends with digits, but those digits are NOT part of a bracket like [1]
-    is_numeric = False
-    max_num = 0
-    clean_fmt = format_str
-
-    # Regex to find ending digits that are NOT a bracket index
-    # We look for digits at the end ($) preceded by something that isn't a closing bracket
-    re_numeric_suffix = re.compile(r'^(.*?)(\d+)$')
-    
-    # Check if it looks like a numeric suffix format
-    if not format_str.endswith(']'):
-        match = re_numeric_suffix.match(format_str)
-        if match:
-            clean_fmt = match.group(1)
-            max_num = int(match.group(2))
-            is_numeric = True
-
-    # 2. Parse Tokens (first, middle, last, [n])
-    # This regex identifies keywords and optional length constraints
-    token_pattern = re.compile(r'(first|middle|last)(?:\[(\d+)\])?', re.IGNORECASE)
-    
-    instructions = []
-    last_pos = 0
-    
-    for match in token_pattern.finditer(clean_fmt):
-        # Text preceding the token (separators like ., -, _)
-        if match.start() > last_pos:
-            static_text = clean_fmt[last_pos:match.start()]
-            instructions.append(TemplateInstruction('const', static_text))
+    @staticmethod
+    def compile_format(format_str: str) -> CompiledFormat:
+        """
+        Parses a format string ONCE into a list of optimized instructions.
+        Replaces runtime Regex with static list iteration.
+        """
         
-        # The Variable (first/middle/last)
-        key = match.group(1)
-        length = int(match.group(2)) if match.group(2) else None
+        # 1. Detect Numeric Suffix (e.g., "first.last5")
+        # Logic: Ends with digits, but those digits are NOT part of a bracket like [1]
+        is_numeric = False
+        max_num = 0
+        clean_fmt = format_str
 
-        # Detect Casing Strategy based on the token string
-        casing = 'none'
-        if key.isupper():
-            casing = 'upper'
-        elif key and key[0].isupper():
-            casing = 'capitalize'
-        instructions.append(TemplateInstruction('var', key.lower(), length, casing))
+        # Regex to find ending digits that are NOT a bracket index
+        # We look for digits at the end ($) preceded by something that isn't a closing bracket
+        re_numeric_suffix = re.compile(r'^(.*?)(\d+)$')
         
-        last_pos = match.end()
-    
-    # Remaining text after the last token
-    if last_pos < len(clean_fmt):
-        instructions.append(TemplateInstruction('const', clean_fmt[last_pos:]))
+        # Check if it looks like a numeric suffix format
+        if not format_str.endswith(']'):
+            match = re_numeric_suffix.match(format_str)
+            if match:
+                clean_fmt = match.group(1)
+                max_num = int(match.group(2))
+                is_numeric = True
 
-    return CompiledFormat(instructions, is_numeric, max_num, casing, format_str)
+        # 2. Parse Tokens (first, middle, last, [n])
+        # This regex identifies keywords and optional length constraints
+        token_pattern = re.compile(r'(first|middle|last)(?:\[(\d+)\])?', re.IGNORECASE)
+        
+        instructions = []
+        last_pos = 0
+        
+        for match in token_pattern.finditer(clean_fmt):
+            # Text preceding the token (separators like ., -, _)
+            if match.start() > last_pos:
+                static_text = clean_fmt[last_pos:match.start()]
+                instructions.append(TemplateInstruction('const', static_text))
+            
+            # The Variable (first/middle/last)
+            key = match.group(1)
+            length = int(match.group(2)) if match.group(2) else None
+
+            # Detect Casing Strategy based on the token string
+            casing = 'none'
+            if key.isupper():
+                casing = 'upper'
+            elif key and key[0].isupper():
+                casing = 'capitalize'
+            instructions.append(TemplateInstruction('var', key.lower(), length, casing))
+            
+            last_pos = match.end()
+        
+        # Remaining text after the last token
+        if last_pos < len(clean_fmt):
+            instructions.append(TemplateInstruction('const', clean_fmt[last_pos:]))
+
+        return CompiledFormat(instructions, is_numeric, max_num, casing, format_str)
 
 class Utils:
     # --- UTILS ---
@@ -169,7 +170,7 @@ class UsernameGenerator:
 
         # Compile Formats
         self.logger.log("[*] Compiling formats...")
-        self.compiled_formats = [compile_format(fmt) for fmt in (raw_formats if raw_formats else self.DEFAULT_FORMATS)]
+        self.compiled_formats = [CompiledFormat.compile_format(fmt) for fmt in (raw_formats if raw_formats else self.DEFAULT_FORMATS)]
         self.logger.log(f"[*] Using {len(self.compiled_formats)} formats")
 
         self.logger.log(f"[*] Expecting an output of {self.total_items * len(self.compiled_formats)} usernames")
