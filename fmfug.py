@@ -52,8 +52,8 @@ class CompiledFormat:
         self.max_num = max_num       # The max number for iterator
         self.original_fmt = original_fmt
 
-    @staticmethod
-    def compile_format(format_str: str) -> CompiledFormat:
+    @classmethod
+    def compile_format(CompiledFormat, format_str: str):
         """
         Parses a format string ONCE into a list of optimized instructions.
         Replaces runtime Regex with static list iteration.
@@ -173,7 +173,11 @@ class UsernameGenerator:
         self.compiled_formats = [CompiledFormat.compile_format(fmt) for fmt in (raw_formats if raw_formats else self.DEFAULT_FORMATS)]
         self.logger.log(f"[*] Using {len(self.compiled_formats)} formats")
 
-        self.logger.log(f"[*] Expecting an output of {self.total_items * len(self.compiled_formats)} usernames")
+        # Numeric suffix formats will ouput more than 1 username per format
+        total_formats = sum([cf.max_num + 1 for cf in self.compiled_formats])
+        # Calculate expected total for progress bar
+        self.expected_total = self.total_items * total_formats
+        self.logger.log(f"[*] Expecting an output of {self.total_items * total_formats} usernames")
 
         # Execution Config
         # We need bigger chunks for multiprocessing to offset the pickling cost
@@ -188,9 +192,6 @@ class UsernameGenerator:
 
     def generate(self, out_handle: TextIO):
 
-        
-        # Calculate expected total for progress bar
-        expected_total = self.total_items * len(self.compiled_formats)
         # Note: Numeric suffixes might increase this, but it's an estimate.
 
         self.logger.log(f"[*] Processes: {self.threads}")
@@ -226,7 +227,7 @@ class UsernameGenerator:
                     except Exception as e:
                         sys.stderr.write(f"[!] Worker Error: {e}\n")
 
-            with tqdm(total=expected_total, unit=" username", disable=not show_bar, bar_format=self.bar_format, unit_scale=True) as pbar:
+            with tqdm(total=self.expected_total, unit=" username", disable=not show_bar, bar_format=self.bar_format, unit_scale=True) as pbar:
                 
                 # Futures submit loop
                 for chunk in Utils.chunked_iterable(self.name_source, self.BATCH_SIZE):
