@@ -57,14 +57,14 @@ pipx install fmfug
 
 ## 🧑💻 Usage
 
-    ```
-    usage: fmfug [-h] [-i INPUT] [-o OUTPUT] [-f FORMAT_LIST]
-                    [--formats FORMATS] [-t THREADS] [--no-parallel]
-                    [--case-sensitive] [-q] [--list-formats]
-                    [--first-names FIRST_NAMES] [--last-names LAST_NAMES]
-    
-    Generate username variations (streaming + multithreading)
-    ```
+```
+usage: fmfug [-h] [-i INPUT] [-o OUTPUT] [-f FORMAT_LIST]
+                [--formats FORMATS] [-t THREADS] [--no-parallel]
+                [--case-sensitive] [-q] [--list-formats]
+                [--first-names FIRST_NAMES] [--last-names LAST_NAMES]
+
+Generate username variations (streaming + multithreading)
+```
 
 ---
 
@@ -72,7 +72,7 @@ pipx install fmfug
 
 | Option | Description |
 |-------|-------------|
-| `-i`, `--input INPUT` | Input file with full names (default: users.txt) |
+| `-i`, `--input INPUT` | Input file with full names (default: users.txt, use - for stdin) |
 | `-fn`, `--first-names FIRST_NAMES` | File containing first names (one per line) |
 | `-ln`, `--last-names LAST_NAMES` | File containing last names (one per line) |
 | `-o`, `--output OUTPUT` | Output file (default: stdout) |
