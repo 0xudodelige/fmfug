@@ -35,11 +35,12 @@ except ImportError:
 
 class TemplateInstruction:
     """Stores a single instruction for building a username part."""
-    __slots__ = ('type', 'value', 'length') # Optimization for memory
-    def __init__(self, type_: str, value: str, length: Optional[int] = None):
+    __slots__ = ('type', 'value', 'length', 'casing') # Optimization for memory
+    def __init__(self, type_: str, value: str, length: Optional[int] = None, casing: str = 'none'):
         self.type = type_   # 'const' (static text) or 'var' (first/last/middle)
         self.value = value  # The text or the key name
         self.length = length # Truncation length (if any)
+        self.casing = casing # Case handling fo this instruction
 
 class CompiledFormat:
     """Holds the instructions for a specific format string."""
@@ -49,7 +50,6 @@ class CompiledFormat:
         self.instructions = instructions
         self.is_numeric = is_numeric # True if format ends with iterator (e.g. first5)
         self.max_num = max_num       # The max number for iterator
-        self.casing = casing         # 'lower', 'upper', 'capitalize', 'none'
         self.original_fmt = original_fmt
 
 def compile_format(format_str: str) -> CompiledFormat:
@@ -76,14 +76,7 @@ def compile_format(format_str: str) -> CompiledFormat:
             max_num = int(match.group(2))
             is_numeric = True
 
-    # 2. Detect Casing Strategy based on the format string itself
-    casing = 'none'
-    if clean_fmt.isupper() and len(clean_fmt) > 1:
-        casing = 'upper'
-    elif clean_fmt and clean_fmt[0].isupper() and len(clean_fmt) > 1:
-        casing = 'capitalize'
-
-    # 3. Parse Tokens (first, middle, last, [n])
+    # 2. Parse Tokens (first, middle, last, [n])
     # This regex identifies keywords and optional length constraints
     token_pattern = re.compile(r'(first|middle|last)(?:\[(\d+)\])?', re.IGNORECASE)
     
@@ -97,9 +90,16 @@ def compile_format(format_str: str) -> CompiledFormat:
             instructions.append(TemplateInstruction('const', static_text))
         
         # The Variable (first/middle/last)
-        key = match.group(1).lower()
+        key = match.group(1)
         length = int(match.group(2)) if match.group(2) else None
-        instructions.append(TemplateInstruction('var', key, length))
+
+        # Detect Casing Strategy based on the token string
+        casing = 'none'
+        if key.isupper():
+            casing = 'upper'
+        elif key and key[0].isupper():
+            casing = 'capitalize'
+        instructions.append(TemplateInstruction('var', key.lower(), length, casing))
         
         last_pos = match.end()
     
@@ -294,37 +294,28 @@ class UsernameGenerator:
                     else:
                         # It's a variable (first/last)
                         val = parts[instr.value]
-                        if not val: 
+                        if val:
+                            if global_case_sensitive:
+                                if instr.casing == 'upper':
+                                    val = val.upper()
+                                elif instr.casing == 'capitalize':
+                                    val = val.capitalize()
+                            if instr.length:
+                                segments.append(val[:instr.length])
+                            else:
+                                segments.append(val)
+                        else:
                             # If a required part is missing (e.g. middle name), we might skip
                             # But standard behavior is often just empty string. 
                             # We append empty string.
                             segments.append('')
-                        elif instr.length:
-                            segments.append(val[:instr.length])
-                        else:
-                            segments.append(val)
-                
+
                 base_result = "".join(segments)
                 
                 # If result is empty or just whitespace, skip
                 if not base_result or not base_result.strip():
                     continue
 
-                # 3. Handle Casing
-                final_bases = []
-                
-                # If user forced case_sensitive=False (default behavior implies lowercase usually if not specified)
-                # Logic adapted from original script:
-                if not global_case_sensitive:
-                    base_result = base_result.lower()
-                else:
-                    # Apply format-specific casing detection
-                    if fmt.casing == 'upper':
-                        base_result = base_result.upper()
-                    elif fmt.casing == 'capitalize':
-                        # Simple capitalize. 
-                        base_result = base_result.capitalize()
-                
                 # 4. Handle Numeric Suffixes
                 if fmt.is_numeric:
                     for i in range(fmt.max_num + 1):
