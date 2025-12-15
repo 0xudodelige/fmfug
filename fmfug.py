@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """
-Fast Memory Friendly Username Generator
+Fast Memory Friendly Username Generator (Optimized)
+- Multiprocessing (Bypasses GIL for 100% CPU usage)
+- No-Regex Template Engine (Fast String Concatenation)
 - Streaming input (Low RAM)
-- Threaded Generation
 - Buffered Output (Fast Disk I/O)
-- Progress Bar
 """
 
-version = "1.1"
+version = "1.2"
 
 import argparse
 import sys
 import re
 import itertools
+import os
 from pathlib import Path
-from typing import Iterator, List, TextIO, Optional, Union, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Iterator, List, TextIO, Optional, Tuple, Any
+from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
+
+# Try to import tqdm for progress bar, else fallback to dummy
 try:
     from tqdm import tqdm
 except ImportError:
@@ -23,218 +26,321 @@ except ImportError:
     class tqdm:
         def __init__(self, iterable=None, total=None, unit='it', disable=False):
             self.iterable = iterable
-            self.total = total
-            self.n = 0
         def __iter__(self): return iter(self.iterable)
-        def update(self, n=1): self.n += n
+        def update(self, n=1): pass
         def __enter__(self): return self
         def __exit__(self, exc_type, exc_value, traceback): pass
 
-class UsernameGenerator:
-    """Generates username variations with custom format support."""
+# --- TEMPLATE ENGINE (Optimization Core) ---
+
+class TemplateInstruction:
+    """Stores a single instruction for building a username part."""
+    __slots__ = ('type', 'value', 'length') # Optimization for memory
+    def __init__(self, type_: str, value: str, length: Optional[int] = None):
+        self.type = type_   # 'const' (static text) or 'var' (first/last/middle)
+        self.value = value  # The text or the key name
+        self.length = length # Truncation length (if any)
+
+class CompiledFormat:
+    """Holds the instructions for a specific format string."""
+    def __init__(self, instructions: List[TemplateInstruction], 
+                 is_numeric: bool, max_num: int, 
+                 casing: str, original_fmt: str):
+        self.instructions = instructions
+        self.is_numeric = is_numeric # True if format ends with iterator (e.g. first5)
+        self.max_num = max_num       # The max number for iterator
+        self.casing = casing         # 'lower', 'upper', 'capitalize', 'none'
+        self.original_fmt = original_fmt
+
+def compile_format(format_str: str) -> CompiledFormat:
+    """
+    Parses a format string ONCE into a list of optimized instructions.
+    Replaces runtime Regex with static list iteration.
+    """
     
+    # 1. Detect Numeric Suffix (e.g., "first.last5")
+    # Logic: Ends with digits, but those digits are NOT part of a bracket like [1]
+    is_numeric = False
+    max_num = 0
+    clean_fmt = format_str
+
+    # Regex to find ending digits that are NOT a bracket index
+    # We look for digits at the end ($) preceded by something that isn't a closing bracket
+    re_numeric_suffix = re.compile(r'^(.*?)(\d+)$')
+    
+    # Check if it looks like a numeric suffix format
+    if not format_str.endswith(']'):
+        match = re_numeric_suffix.match(format_str)
+        if match:
+            clean_fmt = match.group(1)
+            max_num = int(match.group(2))
+            is_numeric = True
+
+    # 2. Detect Casing Strategy based on the format string itself
+    casing = 'none'
+    if clean_fmt.isupper() and len(clean_fmt) > 1:
+        casing = 'upper'
+    elif clean_fmt and clean_fmt[0].isupper() and len(clean_fmt) > 1:
+        casing = 'capitalize'
+
+    # 3. Parse Tokens (first, middle, last, [n])
+    # This regex identifies keywords and optional length constraints
+    token_pattern = re.compile(r'(first|middle|last)(?:\[(\d+)\])?', re.IGNORECASE)
+    
+    instructions = []
+    last_pos = 0
+    
+    for match in token_pattern.finditer(clean_fmt):
+        # Text preceding the token (separators like ., -, _)
+        if match.start() > last_pos:
+            static_text = clean_fmt[last_pos:match.start()]
+            instructions.append(TemplateInstruction('const', static_text))
+        
+        # The Variable (first/middle/last)
+        key = match.group(1).lower()
+        length = int(match.group(2)) if match.group(2) else None
+        instructions.append(TemplateInstruction('var', key, length))
+        
+        last_pos = match.end()
+    
+    # Remaining text after the last token
+    if last_pos < len(clean_fmt):
+        instructions.append(TemplateInstruction('const', clean_fmt[last_pos:]))
+
+    return CompiledFormat(instructions, is_numeric, max_num, casing, format_str)
+
+class Utils:
+    # --- UTILS ---
+    @staticmethod
+    def batch_write(file_handle: TextIO, buffer: List[str]):
+        """Writes the buffer to disk in one go."""
+        if not buffer or not file_handle:
+            return
+        file_handle.write('\n'.join(buffer) + '\n')
+
+    @staticmethod
+    def chunked_iterable(iterable, size):
+        """Helper to slice an iterator into chunks."""
+        it = iter(iterable)
+        while True:
+            chunk = tuple(itertools.islice(it, size))
+            if not chunk:
+                break
+            yield chunk
+
+    @staticmethod
+    def load_names(filepath: Path) -> List[str]:
+        """Loads names into memory (List) to allow easy slicing."""
+        if filepath.as_posix() == "-":
+            return [line.strip() for line in sys.stdin if line.strip()]
+        if not filepath.exists():
+            raise FileNotFoundError(f"{filepath} not found.")
+        with filepath.open('r', encoding='utf-8', errors='ignore') as f:
+            return [line.strip() for line in f if line.strip()]
+
+    @staticmethod
+    def load_formats(filepath: Path) -> List[str]:
+        if not filepath.exists():
+            raise FileNotFoundError(f"{filepath} not found.")
+        with filepath.open('r', encoding='utf-8') as f:
+            return [line.strip() for line in f if line.strip() and not line.startswith('#')]
+
+
+
+class UsernameGenerator:
+    # Default Formats
     DEFAULT_FORMATS = [
         'first', 'last', 'firstlast', 'lastfirst',
         'first.last', 'last.first', 'first-last', 'last-first',
         'first_last', 'last_first', 'first[1].last', 'last[1].first',
-        'firstlast[1]', 'first[1]last', 'last[1]first', 'lastfirst[1]', 'first[1]last[1]', 'last[1]first[1]',
+        'firstlast[1]', 'first[1]last', 'last[1]first', 'lastfirst[1]', 
+        'first[1]last[1]', 'last[1]first[1]',
     ]
-    
-    def __init__(self, case_sensitive: bool = True, formats: Optional[List[str]] = None):
+
+    def __init__(self, name_source, total_items, raw_formats, threads, case_sensitive, logger):
+        self.name_source = name_source
+        self.total_items = total_items
+        # self.out_handle = out_handle
+        self.threads = threads
         self.case_sensitive = case_sensitive
-        self.formats = formats or self.DEFAULT_FORMATS
-        
-        # --- Pre-compiled Regex ---
-        self.re_numeric = re.compile(r'(first|middle|last)(\[(\d+)\])?(\d+)$')
-        self.re_bracket = re.compile(r'(first|middle|last)\[(\d+)\]')
-        self.re_keywords = re.compile(r'(first|middle|last)')
-        self.re_separators = re.compile(r'([._-])')
+        self.logger = logger
+        self.total_generated = 0
 
-    def parse_name(self, name: str) -> dict:
-        parts = name.strip().split()
-        return {
-            'first': parts[0] if len(parts) > 0 else '',
-            'middle': parts[1] if len(parts) > 2 else '',
-            'last': parts[-1] if len(parts) > 1 else '',
-        }
-    
-    def _process_format(self, format_str: str, name_parts: dict) -> Optional[str]:
-        result = format_str
-        
-        # Handling lengths [n]
-        def replace_with_length(match):
-            (part, length) = match.group(1, 2)
-            value = name_parts.get(part, '')
-            return value[:int(length)] if value else ''
-        
-        result = self.re_bracket.sub(replace_with_length, result)
-        
-        # Keywords substitutions
-        replacements = {
-            'first': name_parts.get('first', ''),
-            'middle': name_parts.get('middle', ''),
-            'last': name_parts.get('last', ''),
-        }
+        # Compile Formats
+        self.logger.log("[*] Compiling formats...")
+        self.compiled_formats = [compile_format(fmt) for fmt in (raw_formats if raw_formats else self.DEFAULT_FORMATS)]
+        self.logger.log(f"[*] Using {len(self.compiled_formats)} formats")
 
-        # We treat each keyword part of the format indepently 
-        parts_arr = self.re_keywords.split(result)
-        final_parts = []
-        for part in parts_arr:
-            if part in replacements:
-                final_parts.append(replacements[part])
-            else:
-                final_parts.append(part)
-        result = "".join(final_parts)
+        # We define a maximum number on pending workers (ex: 2x number of threads)
+        # Prevents loading the whole file in memory using the lazy iterator
+        self.MAX_PENDING_FUTURES = self.threads * 2
 
-        # Case handling
-        if result and not self.case_sensitive:
-            result = result.lower()
-        elif result:
-            if format_str and format_str[0].isupper() and len(format_str) > 1:
-                if format_str.isupper():
-                    result = result.upper()
-                else:
-                    split_parts = self.re_separators.split(result)
-                    result = ''.join(p.capitalize() if p and p[0].isalpha() else p for p in split_parts)
+    def generate(self, out_handle: TextIO):
+        # 1. Execution Config
+        # We need bigger chunks for multiprocessing to offset the pickling cost
+        # If we have 1M names and 4 cores -> 250k names per core theoretically
+        # But we stream chunks. 5000 is a good balance for memory vs speed.
+        BATCH_SIZE = 5000 
+        WRITE_BUFFER_SIZE = 20000
         
-        return result if result and not result.isspace() else None
-    
-    def apply_format(self, format_str: str, name_parts: dict) -> Iterator[str]:
-        # Handling numerical suffixes (first5 -> anna0...anna5)
-        match = self.re_numeric.match(format_str)
-        if match:
-            (base_format, num) = match.group(1, 4) # (\d+)
-            base_username = self._process_format(base_format, name_parts)
-            if base_username:
-                for i in range(int(num) + 1):
-                    yield f"{base_username}{i}"
-            return
-        
-        username = self._process_format(format_str, name_parts)
-        if username:
-            yield username
-    
-    def generate_from_name(self, name: str) -> List[str]:
-        """Retourne une LISTE de résultats au lieu de yield, pour le buffering."""
+        # Calculate expected total for progress bar
+        expected_total = self.total_items * len(self.compiled_formats)
+        # Note: Numeric suffixes might increase this, but it's an estimate.
+
+        self.logger.log(f"[*] Processes: {self.threads}")
+        self.logger.log("[*] Generating...")
+
+        total_generated = 0
+        output_buffer = []
+
+        # 2. Parallel Execution (WITH BACKPRESSURE)
+        with ProcessPoolExecutor(max_workers=self.threads) as executor:
+            
+            show_bar = (out_handle is not sys.stdout)
+            
+            pending_futures = set()
+            
+            # Fonction helper pour traiter les résultats (évite la duplication de code)
+            def process_done_futures(done_set):
+                nonlocal total_generated, output_buffer
+                for future in done_set:
+                    try:
+                        batch_results = future.result()
+                        count = len(batch_results)
+                        total_generated += count
+                        pbar.update(count)
+                        
+                        if out_handle:
+                            output_buffer.extend(batch_results)
+                            if len(output_buffer) >= WRITE_BUFFER_SIZE:
+                                Utils.batch_write(out_handle, output_buffer)
+                                output_buffer.clear() # Important: clear in place
+                        else:
+                            for res in batch_results:
+                                print(res)
+                    except Exception as e:
+                        sys.stderr.write(f"[!] Worker Error: {e}\n")
+
+            with tqdm(total=expected_total, unit=" usernames", disable=not show_bar) as pbar:
+                
+                # Futures submit loop
+                for chunk in Utils.chunked_iterable(self.name_source, BATCH_SIZE):
+                    
+                    # 1. If we have too much futures ongoing, wait for one to finish
+                    if len(pending_futures) >= self.MAX_PENDING_FUTURES:
+                        # wait() blocks until at least ONE future completes
+                        done, pending_futures = wait(pending_futures, return_when=FIRST_COMPLETED)
+                        process_done_futures(done)
+                    
+                    # 2. Submit a new futute
+                    fut = executor.submit(self.worker_process_batch, chunk, self.compiled_formats, self.case_sensitive)
+                    pending_futures.add(fut)
+
+                # 3. Wait for all pending futures at the end
+                while pending_futures:
+                    done, pending_futures = wait(pending_futures, return_when=FIRST_COMPLETED)
+                    process_done_futures(done)
+            
+            # Flush final buffer
+            if out_handle and output_buffer:
+                Utils.batch_write(out_handle, output_buffer)
+
+
+    # --- Worker Function (Executed by a Thread) ---
+
+    def worker_process_batch(self, names_batch: List[Any], 
+                             compiled_formats: List[CompiledFormat], 
+                             global_case_sensitive: bool) -> List[str]:
+        """
+        Executed by independent processes.
+        Receives a batch of raw name data and generates usernames based on compiled formats.
+        """
         results = []
-        name = name.strip()
-        if not name:
-            return results
         
-        name_parts = self.parse_name(name)
-        if not name_parts['first']:
-            return results
+        # Pre-allocate reuseable dictionary to avoid creation overhead
+        parts = {'first': '', 'middle': '', 'last': ''}
         
-        for format_pattern in self.formats:
-            for res in self.apply_format(format_pattern, name_parts):
-                results.append(res)
+        for item in names_batch:
+            # 1. Parse Name
+            if isinstance(item, tuple): # Combination mode (fn, ln)
+                fn, ln = item
+                parts['first'] = fn
+                parts['middle'] = ''
+                parts['last'] = ln
+            else: # String mode "John Doe"
+                raw_parts = item.strip().split()
+                if not raw_parts: continue
+                parts['first'] = raw_parts[0]
+                parts['middle'] = raw_parts[1] if len(raw_parts) > 2 else ''
+                parts['last'] = raw_parts[-1] if len(raw_parts) > 1 else ''
+
+            if not parts['first']: continue
+
+            # 2. Apply Formats
+            for fmt in compiled_formats:
+                
+                # Build the string (Fast Loop)
+                # Using a list comprehension or loop with join is faster than +=
+                segments = []
+                valid_gen = True
+                
+                for instr in fmt.instructions:
+                    if instr.type == 'const':
+                        segments.append(instr.value)
+                    else:
+                        # It's a variable (first/last)
+                        val = parts[instr.value]
+                        if not val: 
+                            # If a required part is missing (e.g. middle name), we might skip
+                            # But standard behavior is often just empty string. 
+                            # We append empty string.
+                            segments.append('')
+                        elif instr.length:
+                            segments.append(val[:instr.length])
+                        else:
+                            segments.append(val)
+                
+                base_result = "".join(segments)
+                
+                # If result is empty or just whitespace, skip
+                if not base_result or not base_result.strip():
+                    continue
+
+                # 3. Handle Casing
+                final_bases = []
+                
+                # If user forced case_sensitive=False (default behavior implies lowercase usually if not specified)
+                # Logic adapted from original script:
+                if not global_case_sensitive:
+                    base_result = base_result.lower()
+                else:
+                    # Apply format-specific casing detection
+                    if fmt.casing == 'upper':
+                        base_result = base_result.upper()
+                    elif fmt.casing == 'capitalize':
+                        # Simple capitalize. 
+                        base_result = base_result.capitalize()
+                
+                # 4. Handle Numeric Suffixes
+                if fmt.is_numeric:
+                    for i in range(fmt.max_num + 1):
+                        results.append(f"{base_result}{i}")
+                else:
+                    results.append(base_result)
+                    
         return results
 
-    def process_single_task(self, args) -> List[str]:
-        """Wrapper pour l'executor."""
-        name, fn, ln = args
-        full_name = f"{fn} {ln}" if fn and ln else name
-        return self.generate_from_name(full_name)
+class Logger:
+    def __init__(self, output, quiet):
+        self.output = output
+        self.quiet = quiet
 
+    # Logging helper
+    def log(self, msg):
+        if not self.quiet and (self.output or sys.stderr.isatty()):
+            sys.stderr.write(msg + "\n")
 
-# --- FONCTIONS UTILITAIRES ---
-
-def batch_write(file_handle: TextIO, buffer: List[str]):
-    """Écrit le buffer d'un coup sur le disque."""
-    if not buffer or not file_handle:
-        return
-    # join is faster than successive write syscalls
-    file_handle.write('\n'.join(buffer) + '\n')
-
-def run_processing(generator: UsernameGenerator, 
-                  name_iterator: Iterator, 
-                  total_count: int, 
-                  output_file: Optional[TextIO], 
-                  workers: int = 4):
-    """
-    Main handler : Parallelism + Buffer + Backpressure
-    """
-    
-    # Configuration
-    WRITE_BUFFER_SIZE = 1000  # Number of lines before writing to IO
-    CHUNK_SIZE = workers * 200 # Number of names loaded in RAM concurrently
-    
-    output_buffer = []
-    total_generated = 0
-    
-    def prepare_args(item):
-        if isinstance(item, tuple):
-            return (None, item[0], item[1]) # (None, fn, ln)
-        return (item, None, None)           # (name, None, None)
-
-    # L'Executor
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        
-        # Barre de progression
-        # On désactive la barre si on écrit sur stdout pour ne pas polluer la sortie
-        show_bar = output_file is not None and output_file != sys.stdout
-        
-        with tqdm(total=total_count, unit=" name", disable=not show_bar) as pbar:
-            
-            iterator = iter(name_iterator)
-            
-            while True:
-                # 1. Load a small slice
-                chunk = list(itertools.islice(iterator, CHUNK_SIZE))
-                if not chunk:
-                    break
-                
-                # 2. Submit slice
-                futures = {
-                    executor.submit(generator.process_single_task, prepare_args(item)): item 
-                    for item in chunk
-                }
-                
-                # 3. Aggregate resulting usernames
-                for future in as_completed(futures):
-                    try:
-                        usernames = future.result()
-                        total_generated += len(usernames)
-                        
-                        # --- Buffered disk writing ---
-                        if output_file:
-                            output_buffer.extend(usernames)
-                            if len(output_buffer) >= WRITE_BUFFER_SIZE:
-                                batch_write(output_file, output_buffer)
-                                output_buffer = [] # Reset buffer
-                        else:
-                            # Print directly to stdout
-                            for u in usernames:
-                                print(u)
-                                
-                    except Exception as e:
-                        original_item = futures[future]
-                        sys.stderr.write(f"[!] Error processing {original_item}: {e}\n")
-                    
-                    finally:
-                        pbar.update(1)
-            
-            # 4. Write rest of the buffer
-            if output_file and output_buffer:
-                batch_write(output_file, output_buffer)
-
-    return total_generated
-
-def load_names(filepath: Path) -> List[str]:
-    if filepath.as_posix() == "-":
-        return [line.strip() for line in sys.stdin if line.strip()]
-    if not filepath.exists():
-        raise FileNotFoundError(f"{filepath} not found.")
-    with filepath.open('r', encoding='utf-8') as f:
-        return [line.strip() for line in f if line.strip()]
-
-def load_formats(filepath: Path) -> List[str]:
-    if not filepath.exists():
-        raise FileNotFoundError(f"{filepath} not found.")
-    with filepath.open('r', encoding='utf-8') as f:
-        return [line.strip() for line in f if line.strip() and not line.startswith('#')]
-
-# --- MAIN ---
+# --- MAIN CONTROLLER ---
 
 def main():
     parser = argparse.ArgumentParser(
@@ -242,15 +348,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
+    # Reusing exact same arguments as original script
     parser.add_argument('-i', '--input', type=Path, default=Path('users.txt'), help='Input file with names (use - for stdin)')
     parser.add_argument('-o', '--output', type=Path, help='Output file (Default: stdout)')
     parser.add_argument('-f', '--format', action='append', dest='format_list', help='Add format pattern')
     parser.add_argument('--formats', type=Path, help='File with format patterns')
-    parser.add_argument('-t', '--threads', type=int, default=4, help='Number of threads')
+    parser.add_argument('-t', '--threads', type=int, default=os.cpu_count(), help='Number of processes (Default: CPU count)')
     parser.add_argument('-fn', '--first-names', type=Path, help='First names file')
     parser.add_argument('-ln', '--last-names', type=Path, help='Last names file')
     parser.add_argument('-q', '--quiet', action='store_true', help='Quiet mode (for redirection or pipe)')
-    parser.add_argument('-cs', '--case-sensitive', action='store_true', help='Preserve case')
+    parser.add_argument('-cs', '--case-sensitive', action='store_true', help='Preserve case based on format')
     parser.add_argument('-lf', '--list-formats', action='store_true', help='Show default formats')
 
     args = parser.parse_args()
@@ -258,10 +365,9 @@ def main():
     if args.list_formats:
         print("\n".join(UsernameGenerator.DEFAULT_FORMATS))
         return 0
+    
+    logger = Logger(args.output, args.quiet)
 
-    def log(msg):
-        if not args.quiet and (args.output or sys.stderr.isatty()):
-            sys.stderr.write(msg + "\n")
     ascii_logo = f"""
 $$$$$$$$\\ $$\\      $$\\ $$$$$$$$\\ $$\\   $$\\  $$$$$$\\  
 $$  _____|$$$\\    $$$ |$$  _____|$$ |  $$ |$$  __$$\\ 
@@ -275,68 +381,67 @@ $$ |      $$ | \\_/ $$ |$$ |      \\$$$$$$  |\\$$$$$$  |
     v{version}
     Made in France ♥               by Udodelige
     """
-    log(ascii_logo)
+    logger.log(ascii_logo)
 
     try:
-        # Preparing data (Lazy iterator)
-        name_iterator = []
+        # 1. Prepare Data Source
+        name_source = []
         total_items = 0
         
-        # Combination mode (First x Last)
+        # Combination Mode (Cartesian Product)
         if args.first_names and args.last_names:
-            log(f"[*] Loading lists...")
-            fns = load_names(args.first_names)
-            lns = load_names(args.last_names)
-            # itertools.product does not load everything in RAM
-            name_iterator = itertools.product(fns, lns)
+            logger.log(f"[*] Loading lists...")
+            fns = Utils.load_names(args.first_names)
+            lns = Utils.load_names(args.last_names)
+            # We don't materialize the full list to save RAM, we iterate
+            name_source = itertools.product(fns, lns)
             total_items = len(fns) * len(lns)
-            log(f"[*] Mode: Combination ({len(fns)} fnames x {len(lns)} lnames = {total_items} names)")
+            logger.log(f"[*] Mode: Combination ({len(fns)} fnames x {len(lns)} lnames = {total_items} base names)")
         
-        # Simple mode ("john doe" format)
+        # Single List Mode
         else:
-            log(f"[*] Loading input: {args.input}")
-            names = load_names(args.input)
-            name_iterator = names
-            total_items = len(names)
-            log(f"[*] Mode: Single List ({total_items} items)")
+            if args.input.as_posix() == "-" or args.input.exists():
+                logger.log(f"[*] Loading input: {args.input}")
+                name_source = Utils.load_names(args.input)
+                total_items = len(name_source)
+                logger.log(f"[*] Mode: Single List ({total_items} items)")
+            else:
+                logger.log(f"[!] Input file {args.input} not found.")
+                sys.exit(1)
 
-        # Formats
-        formats = None
+        # 2. Prepare Formats
+        raw_formats = None
         if args.formats:
-            formats = load_formats(args.formats)
+            raw_formats = Utils.load_formats(args.formats)
         elif args.format_list:
-            formats = args.format_list
-        
-        # Output
-        out_handle = None
+            raw_formats = args.format_list
+
+        # 3. Setup Output
+        out_handle = sys.stdout
         if args.output:
             out_handle = args.output.open('w', encoding='utf-8')
-            log(f"[*] Output: {args.output}")
+            logger.log(f"[*] Output: {args.output}")
         else:
-            log("[*] Output: stdout")
+            logger.log("[*] Output: stdout")
 
-        # Initialisation
         generator = UsernameGenerator(
-            case_sensitive=args.case_sensitive,
-            formats=formats
-        )
+                                name_source,
+                                total_items,
+                                raw_formats,  
+                                args.threads, 
+                                args.case_sensitive,
+                                logger
+                                )
 
-        log(f"[*] Using {len(generator.formats)} formats")
+        generator.generate(out_handle)
         
-        log(f"[*] Expecting {total_items * len(generator.formats)} total output usernames")
-        
-        log(f"[*] Threads: {args.threads}")
-        log("[*] Generating...")
-
-        # Execution
-        total = run_processing(generator, name_iterator, total_items, out_handle, args.threads)
-        
-        log(f"\n[✓] Done! Generated {total} usernames.")
+        logger.log(f"\n[✓] Done! Generated {generator.total_generated} usernames.")
 
     except KeyboardInterrupt:
-        log("\n[!] Interrupted.")
+        logger.log("\n[!] Interrupted by user.")
+        # Executor will clean up automatically on exit
     except Exception as e:
-        log(f"\n[!] Error: {e}")
+        logger.log(f"\n[!] Critical Error: {e}")
         import traceback
         traceback.print_exc()
     finally:
