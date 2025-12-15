@@ -165,23 +165,28 @@ class UsernameGenerator:
         self.case_sensitive = case_sensitive
         self.logger = logger
         self.total_generated = 0
+        self.bar_format = '[{elapsed} -> {remaining}] {n_fmt}/{total_fmt} | {desc}: {percentage:3.0f}% | {bar} {rate_fmt}{postfix}'
 
         # Compile Formats
         self.logger.log("[*] Compiling formats...")
         self.compiled_formats = [compile_format(fmt) for fmt in (raw_formats if raw_formats else self.DEFAULT_FORMATS)]
         self.logger.log(f"[*] Using {len(self.compiled_formats)} formats")
 
+        self.logger.log(f"[*] Expecting an output of {self.total_items * len(self.compiled_formats)} usernames")
+
+        # Execution Config
+        # We need bigger chunks for multiprocessing to offset the pickling cost
+        # If we have 1M names and 4 cores -> 250k names per core theoretically
+        # But we stream chunks. 5000 is a good balance for memory vs speed.
+        self.BATCH_SIZE = 4000
+        self.WRITE_BUFFER_SIZE = 20000
+
         # We define a maximum number on pending workers (ex: 2x number of threads)
         # Prevents loading the whole file in memory using the lazy iterator
         self.MAX_PENDING_FUTURES = self.threads * 2
 
     def generate(self, out_handle: TextIO):
-        # 1. Execution Config
-        # We need bigger chunks for multiprocessing to offset the pickling cost
-        # If we have 1M names and 4 cores -> 250k names per core theoretically
-        # But we stream chunks. 5000 is a good balance for memory vs speed.
-        BATCH_SIZE = 5000 
-        WRITE_BUFFER_SIZE = 20000
+
         
         # Calculate expected total for progress bar
         expected_total = self.total_items * len(self.compiled_formats)
@@ -202,17 +207,16 @@ class UsernameGenerator:
             
             # Fonction helper pour traiter les résultats (évite la duplication de code)
             def process_done_futures(done_set):
-                nonlocal total_generated, output_buffer
                 for future in done_set:
                     try:
                         batch_results = future.result()
                         count = len(batch_results)
-                        total_generated += count
+                        self.total_generated += count
                         pbar.update(count)
                         
                         if out_handle:
                             output_buffer.extend(batch_results)
-                            if len(output_buffer) >= WRITE_BUFFER_SIZE:
+                            if len(output_buffer) >= self.WRITE_BUFFER_SIZE:
                                 Utils.batch_write(out_handle, output_buffer)
                                 output_buffer.clear() # Important: clear in place
                         else:
@@ -221,10 +225,10 @@ class UsernameGenerator:
                     except Exception as e:
                         sys.stderr.write(f"[!] Worker Error: {e}\n")
 
-            with tqdm(total=expected_total, unit=" usernames", disable=not show_bar) as pbar:
+            with tqdm(total=expected_total, unit=" username", disable=not show_bar, bar_format=self.bar_format, unit_scale=True) as pbar:
                 
                 # Futures submit loop
-                for chunk in Utils.chunked_iterable(self.name_source, BATCH_SIZE):
+                for chunk in Utils.chunked_iterable(self.name_source, self.BATCH_SIZE):
                     
                     # 1. If we have too much futures ongoing, wait for one to finish
                     if len(pending_futures) >= self.MAX_PENDING_FUTURES:
