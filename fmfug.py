@@ -7,7 +7,7 @@ Fast Memory Friendly Username Generator (Optimized)
 - Buffered Output (Fast Disk I/O)
 """
 
-version = "1.2"
+version = "1.2.1"
 
 import argparse
 import sys
@@ -381,6 +381,7 @@ $$ |      $$ | \\_/ $$ |$$ |      \\$$$$$$  |\\$$$$$$  |
     logger.log(ascii_logo)
 
     try:
+        out_handle = None
         # 1. Prepare Data Source
         name_source = []
         total_items = 0
